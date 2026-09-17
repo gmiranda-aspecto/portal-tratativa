@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Building2, ExternalLink, Printer, AlertCircle } from 'lucide-react';
+import { Building2, ExternalLink, Printer, AlertCircle, BarChart3 } from 'lucide-react';
 import Link from 'next/link';
 
 interface Vistoria {
@@ -24,7 +24,6 @@ export default function AdminPage() {
   useEffect(() => {
     async function carregar() {
       try {
-        // Busca vistorias sem ordenar por coluna inexistente
         const { data: vList, error: errV } = await supabase
           .from('vistorias')
           .select('*');
@@ -123,10 +122,16 @@ export default function AdminPage() {
                     <ExternalLink className="w-3.5 h-3.5" /> Portal
                   </Link>
                   <Link
+                    href={`/admin/analitico/${v.slug}`}
+                    className="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 font-bold text-xs rounded-lg flex items-center gap-1.5 transition"
+                  >
+                    <BarChart3 className="w-3.5 h-3.5 text-cyan-400" /> Analítico
+                  </Link>
+                  <Link
                     href={`/admin/relatorio/${v.slug}`}
                     className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold text-xs rounded-lg flex items-center gap-1.5 shadow transition"
                   >
-                    <Printer className="w-3.5 h-3.5" /> Gerar PDF
+                    <Printer className="w-3.5 h-3.5" /> Relatório PDF
                   </Link>
                 </div>
               </div>
