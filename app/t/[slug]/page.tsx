@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { 
   CheckCircle2, Clock, Upload, Trash2, ShieldAlert, 
-  Building2, UserCheck, History, X, Filter, Check, ZoomIn
+  Building2, UserCheck, History, X, Filter, Check, ZoomIn, Lock
 } from 'lucide-react';
 
 interface HistoricoTratativa {
@@ -149,6 +149,7 @@ export default function PaginaTratativa() {
     }));
   };
 
+  // Apenas arquivos em estágio local (ainda não salvos) podem ser descartados
   const removerArquivoNovo = (id: string, index: number) => {
     setArquivosPorItem(prev => ({
       ...prev,
@@ -157,19 +158,6 @@ export default function PaginaTratativa() {
     setPreviewsLocais(prev => ({
       ...prev,
       [id]: (prev[id] || []).filter((_, i) => i !== index)
-    }));
-  };
-
-  const removerFotoJaSalva = (id: string, urlParaRemover: string) => {
-    setItens(prev => prev.map(it => {
-      if (it.id === id) {
-        const urlsAtuais = (it.foto_comprovacao_url || '')
-          .split(',')
-          .map(u => u.trim())
-          .filter(u => u && u !== urlParaRemover);
-        return { ...it, foto_comprovacao_url: urlsAtuais.join(',') };
-      }
-      return it;
     }));
   };
 
@@ -184,13 +172,13 @@ export default function PaginaTratativa() {
     setSalvandoId(item.id);
 
     try {
-      // 1. Pega as fotos existentes já salvas
+      // 1. Fotos já consolidadas na base
       const fotosExistentes = (item.foto_comprovacao_url || '')
         .split(',')
         .map(u => u.trim())
         .filter(Boolean);
 
-      // 2. Sobe as novas fotos selecionadas para o Supabase Storage
+      // 2. Upload de novas fotos
       const novosArquivos = arquivosPorItem[item.id] || [];
       const urlsNovas: string[] = [];
 
@@ -209,7 +197,7 @@ export default function PaginaTratativa() {
 
       const todasUrls = [...fotosExistentes, ...urlsNovas].join(',');
 
-      // 3. Atualiza na tabela 'ocorrencias'
+      // 3. Atualiza ocorrência
       await supabase
         .from('ocorrencias')
         .update({
@@ -222,7 +210,7 @@ export default function PaginaTratativa() {
         })
         .eq('id', item.id);
 
-      // 4. Insere no Histórico
+      // 4. Salva no Histórico
       const novoHistorico = {
         ocorrencia_id: item.id,
         autor_nome: nomeGlobal.trim(),
@@ -238,11 +226,11 @@ export default function PaginaTratativa() {
         .select()
         .single();
 
-      // Limpa os arquivos temporários locais desse item
+      // Limpa anexos locais após salvar
       setArquivosPorItem(prev => { const c = { ...prev }; delete c[item.id]; return c; });
       setPreviewsLocais(prev => { const c = { ...prev }; delete c[item.id]; return c; });
 
-      // Atualiza o estado local do card
+      // Atualiza estado
       setItens(prev => prev.map(it => {
         if (it.id === item.id) {
           return {
@@ -313,7 +301,7 @@ export default function PaginaTratativa() {
   return (
     <div className="min-h-screen bg-[#020617] text-slate-200 font-sans pb-24">
       
-      {/* CABEÇALHO FIXO COM SESSÃO DO RESPONDENTE */}
+      {/* CABEÇALHO FIXO */}
       <header className="bg-[#0f172a] border-b border-slate-800 sticky top-0 z-30 shadow-md">
         <div className="max-w-5xl mx-auto px-4 py-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
@@ -325,7 +313,7 @@ export default function PaginaTratativa() {
                 </h1>
               </div>
               <p className="text-[11px] text-slate-400 mt-0.5">
-                Vistoria: {vistoria.data_vistoria} • Auditor: {vistoria.vistoriador}
+                Vistoria: {vistoria.data_vistoria} • Vistoriador: {vistoria.vistoriador}
               </p>
             </div>
             
@@ -386,7 +374,7 @@ export default function PaginaTratativa() {
         </div>
       </header>
 
-      {/* ÁREA DE FILTROS (STATUS + CATEGORIAS HORIZONTAIS) */}
+      {/* ÁREA DE FILTROS */}
       <div className="max-w-5xl mx-auto px-4 mt-4 space-y-2.5 text-xs">
         
         {/* Linha 1: Status */}
@@ -422,7 +410,7 @@ export default function PaginaTratativa() {
           </div>
         </div>
 
-        {/* Linha 2: Categorias com rolagem horizontal livre no celular */}
+        {/* Linha 2: Categorias */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 custom-scroll no-wrap">
           <span className="text-slate-500 font-semibold shrink-0 text-[11px]">Categorias:</span>
           
@@ -465,13 +453,13 @@ export default function PaginaTratativa() {
             const jaRespondido = !!item.respondido_em;
             const historico = item.historico || [];
 
-            // Fotos já salvas na base
+            // Fotos salvas na base
             const fotosSalvas = (item.foto_comprovacao_url || '')
               .split(',')
               .map(u => u.trim())
               .filter(Boolean);
 
-            // Fotos novas em estágio local
+            // Fotos novas locais
             const previewsNovos = previewsLocais[item.id] || [];
 
             return (
@@ -546,7 +534,7 @@ export default function PaginaTratativa() {
                   {/* Coluna da Tratativa Operacional */}
                   <div className="md:col-span-7 space-y-3.5 border-t md:border-t-0 md:border-l border-slate-800/80 md:pl-5">
                     
-                    {/* Linha do Tempo de Respostas Anteriores */}
+                    {/* Linha do Tempo */}
                     {historico.length > 0 && (
                       <div className="bg-[#020617] border border-slate-800 p-3 rounded-lg space-y-1.5">
                         <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
@@ -600,7 +588,7 @@ export default function PaginaTratativa() {
                       </select>
                     </div>
 
-                    {/* Parecer / O que foi feito */}
+                    {/* Parecer */}
                     <div>
                       <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
                         Parecer da Operação / Providência Adotada:
@@ -614,40 +602,36 @@ export default function PaginaTratativa() {
                       />
                     </div>
 
-                    {/* COMPROVAÇÃO FOTOGRÁFICA (MÚLTIPLAS FOTOS) */}
+                    {/* COMPROVAÇÃO FOTOGRÁFICA (PROTEÇÃO ANTI-EXCLUSÃO APÓS SALVAR) */}
                     <div>
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
                         Comprovação Fotográfica:
                       </span>
 
-                      {/* Grade de Miniaturas Anexadas */}
                       <div className="flex flex-wrap gap-2.5 mb-2">
-                        {/* 1. Fotos que já estavam salvas na base */}
+                        {/* 1. Fotos já consolidadas na base (TRAVADAS CONTRA EXCLUSÃO ACIDENTAL) */}
                         {fotosSalvas.map((url, fIdx) => (
                           <div key={`salva-${fIdx}`} className="relative w-20 h-16 bg-black rounded-lg overflow-hidden border border-slate-700 shadow shrink-0 group">
                             <img 
                               src={url} 
-                              alt="Comprovação salva" 
+                              alt="Comprovação oficial registrada" 
                               className="w-full h-full object-cover cursor-pointer" 
                               onClick={() => setImagemModal(url)}
+                              title="Evidência oficial salva. Clique para ampliar."
                             />
-                            <button
-                              type="button"
-                              onClick={() => removerFotoJaSalva(item.id, url)}
-                              className="absolute top-1 right-1 bg-rose-600 p-1 rounded-full text-white hover:bg-rose-500 shadow"
-                              title="Remover foto"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
+                            {/* Ícone de bloqueio discreto em vez da lixeira */}
+                            <span className="absolute top-1 right-1 bg-slate-900/80 p-1 rounded text-emerald-400 shadow" title="Evidência consolidada no sistema">
+                              <Lock className="w-2.5 h-2.5" />
+                            </span>
                           </div>
                         ))}
 
-                        {/* 2. Fotos novas selecionadas agora */}
+                        {/* 2. Fotos novas locais (ainda não salvas - PODEM ser excluídas) */}
                         {previewsNovos.map((url, fIdx) => (
                           <div key={`nova-${fIdx}`} className="relative w-20 h-16 bg-black rounded-lg overflow-hidden border-2 border-emerald-500 shadow shrink-0 group">
                             <img 
                               src={url} 
-                              alt="Nova foto" 
+                              alt="Nova foto pendente" 
                               className="w-full h-full object-cover cursor-pointer" 
                               onClick={() => setImagemModal(url)}
                             />
@@ -655,7 +639,7 @@ export default function PaginaTratativa() {
                               type="button"
                               onClick={() => removerArquivoNovo(item.id, fIdx)}
                               className="absolute top-1 right-1 bg-rose-600 p-1 rounded-full text-white hover:bg-rose-500 shadow"
-                              title="Remover anexo"
+                              title="Remover anexo pendente"
                             >
                               <Trash2 className="w-3 h-3" />
                             </button>
@@ -665,7 +649,7 @@ export default function PaginaTratativa() {
                           </div>
                         ))}
 
-                        {/* Botão para adicionar mais fotos */}
+                        {/* Botão de Adicionar mais Fotos */}
                         <label className="flex flex-col items-center justify-center w-20 h-16 rounded-lg bg-slate-900 hover:bg-slate-800 border border-dashed border-slate-600 cursor-pointer text-slate-400 hover:text-slate-200 transition">
                           <Upload className="w-4 h-4 text-emerald-400 mb-0.5" />
                           <span className="text-[9px] font-bold">+ Foto</span>
@@ -680,7 +664,7 @@ export default function PaginaTratativa() {
                       </div>
                     </div>
 
-                    {/* Botão de Salvar individual */}
+                    {/* Botão Salvar */}
                     <div className="flex justify-end pt-1">
                       <button
                         type="button"
@@ -710,7 +694,7 @@ export default function PaginaTratativa() {
         )}
       </main>
 
-      {/* MODAL LIGHTBOX EM TELA CHEIA (AMPLIAÇÃO RÁPIDA E CLARA) */}
+      {/* MODAL LIGHTBOX */}
       {imagemModal && (
         <div 
           className="fixed inset-0 z-50 bg-black/95 p-4 flex flex-col items-center justify-center animate-fadeIn"
