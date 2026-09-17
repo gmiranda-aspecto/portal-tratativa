@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { 
   CheckCircle2, Clock, Upload, Trash2, ShieldAlert, 
-  Building2, UserCheck, History, Eye, Filter, Check
+  Building2, UserCheck, History, X, Filter, Check, ZoomIn
 } from 'lucide-react';
 
 interface HistoricoTratativa {
@@ -65,22 +65,24 @@ export default function PaginaTratativa() {
   const [itens, setItens] = useState<Ocorrencia[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [salvandoId, setSalvandoId] = useState<string | null>(null);
-  const [previews, setPreviews] = useState<{ [key: string]: string }>({});
-  const [arquivosFoto, setArquivosFoto] = useState<{ [key: string]: File }>({});
 
-  // 1. ERGONOMIA: Identificação Global Única do Respondente
+  // Múltiplos arquivos e previews locais por ocorrência
+  const [arquivosPorItem, setArquivosPorItem] = useState<{ [key: string]: File[] }>({});
+  const [previewsLocais, setPreviewsLocais] = useState<{ [key: string]: string[] }>({});
+
+  // Identificação Global do Respondente
   const [nomeGlobal, setNomeGlobal] = useState('');
   const [cargoGlobal, setCargoGlobal] = useState('');
   const [editandoPerfil, setEditandoPerfil] = useState(false);
 
-  // Filtros de visualização
+  // Filtros dinâmicos
   const [filtroStatus, setFiltroStatus] = useState<'todas' | 'pendentes' | 'respondidas'>('todas');
+  const [filtroCategoria, setFiltroCategoria] = useState<string>('TODAS');
 
-  // Modal para ver foto ampliada em tela cheia (útil em mobile)
-  const [fotoModal, setFotoModal] = useState<string | null>(null);
+  // Modal para tela cheia / Lightbox
+  const [imagemModal, setImagemModal] = useState<string | null>(null);
 
   useEffect(() => {
-    // Carrega nome salvo no dispositivo
     const nSalvo = localStorage.getItem('vistoria_respondente_nome') || '';
     const cSalvo = localStorage.getItem('vistoria_respondente_cargo') || '';
     setNomeGlobal(nSalvo);
@@ -118,7 +120,7 @@ export default function PaginaTratativa() {
 
   const salvarPerfilGlobal = () => {
     if (!nomeGlobal.trim()) {
-      alert("Por favor, digite pelo menos seu Nome para continuar.");
+      alert("Por favor, digite seu Nome para continuar.");
       return;
     }
     localStorage.setItem('vistoria_respondente_nome', nomeGlobal.trim());
@@ -130,14 +132,45 @@ export default function PaginaTratativa() {
     setItens(prev => prev.map(item => item.id === id ? { ...item, [campo]: valor } : item));
   };
 
-  const selecionarArquivo = (id: string, file: File | null) => {
-    if (!file) {
-      setArquivosFoto(prev => { const c = { ...prev }; delete c[id]; return c; });
-      setPreviews(prev => { const c = { ...prev }; delete c[id]; return c; });
-      return;
-    }
-    setArquivosFoto(prev => ({ ...prev, [id]: file }));
-    setPreviews(prev => ({ ...prev, [id]: URL.createObjectURL(file) }));
+  // Gerenciamento de Múltiplos Arquivos
+  const adicionarArquivos = (id: string, novos: FileList | null) => {
+    if (!novos || novos.length === 0) return;
+    const novosArr = Array.from(novos);
+
+    setArquivosPorItem(prev => ({
+      ...prev,
+      [id]: [...(prev[id] || []), ...novosArr]
+    }));
+
+    const novosPreviews = novosArr.map(f => URL.createObjectURL(f));
+    setPreviewsLocais(prev => ({
+      ...prev,
+      [id]: [...(prev[id] || []), ...novosPreviews]
+    }));
+  };
+
+  const removerArquivoNovo = (id: string, index: number) => {
+    setArquivosPorItem(prev => ({
+      ...prev,
+      [id]: (prev[id] || []).filter((_, i) => i !== index)
+    }));
+    setPreviewsLocais(prev => ({
+      ...prev,
+      [id]: (prev[id] || []).filter((_, i) => i !== index)
+    }));
+  };
+
+  const removerFotoJaSalva = (id: string, urlParaRemover: string) => {
+    setItens(prev => prev.map(it => {
+      if (it.id === id) {
+        const urlsAtuais = (it.foto_comprovacao_url || '')
+          .split(',')
+          .map(u => u.trim())
+          .filter(u => u && u !== urlParaRemover);
+        return { ...it, foto_comprovacao_url: urlsAtuais.join(',') };
+      }
+      return it;
+    }));
   };
 
   const salvarTratativa = async (item: Ocorrencia) => {
@@ -151,42 +184,52 @@ export default function PaginaTratativa() {
     setSalvandoId(item.id);
 
     try {
-      let novaUrlFoto = item.foto_comprovacao_url || '';
+      // 1. Pega as fotos existentes já salvas
+      const fotosExistentes = (item.foto_comprovacao_url || '')
+        .split(',')
+        .map(u => u.trim())
+        .filter(Boolean);
 
-      if (arquivosFoto[item.id]) {
-        const f = arquivosFoto[item.id];
-        const nomeFinal = `${item.id_oficial}_${Date.now()}_${f.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+      // 2. Sobe as novas fotos selecionadas para o Supabase Storage
+      const novosArquivos = arquivosPorItem[item.id] || [];
+      const urlsNovas: string[] = [];
+
+      for (let i = 0; i < novosArquivos.length; i++) {
+        const f = novosArquivos[i];
+        const nomeFinal = `${item.id_oficial}_${Date.now()}_${i}_${f.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
         const { data: up, error: errUp } = await supabase.storage
           .from('evidencias-tratativas')
           .upload(nomeFinal, f);
 
         if (!errUp && up) {
           const { data: pub } = supabase.storage.from('evidencias-tratativas').getPublicUrl(up.path);
-          novaUrlFoto = pub.publicUrl;
+          urlsNovas.push(pub.publicUrl);
         }
       }
 
-      // 1. Atualiza a ocorrência principal
+      const todasUrls = [...fotosExistentes, ...urlsNovas].join(',');
+
+      // 3. Atualiza na tabela 'ocorrencias'
       await supabase
         .from('ocorrencias')
         .update({
           status_tratativa: item.status_tratativa || OPCOES_STATUS[0],
           parecer_cliente: item.parecer_cliente || '',
-          foto_comprovacao_url: novaUrlFoto,
+          foto_comprovacao_url: todasUrls,
           responsavel_nome: nomeGlobal.trim(),
           responsavel_cargo: cargoGlobal.trim(),
           respondido_em: new Date().toISOString()
         })
         .eq('id', item.id);
 
-      // 2. Insere um novo registro no Histórico cronológico
+      // 4. Insere no Histórico
       const novoHistorico = {
         ocorrencia_id: item.id,
         autor_nome: nomeGlobal.trim(),
         autor_cargo: cargoGlobal.trim(),
         status_definido: item.status_tratativa || OPCOES_STATUS[0],
         parecer: item.parecer_cliente || '',
-        foto_comprovacao_url: novaUrlFoto
+        foto_comprovacao_url: todasUrls
       };
 
       const { data: histCriado } = await supabase
@@ -195,13 +238,17 @@ export default function PaginaTratativa() {
         .select()
         .single();
 
-      // Atualiza o estado local
+      // Limpa os arquivos temporários locais desse item
+      setArquivosPorItem(prev => { const c = { ...prev }; delete c[item.id]; return c; });
+      setPreviewsLocais(prev => { const c = { ...prev }; delete c[item.id]; return c; });
+
+      // Atualiza o estado local do card
       setItens(prev => prev.map(it => {
         if (it.id === item.id) {
           return {
             ...it,
             status_tratativa: item.status_tratativa || OPCOES_STATUS[0],
-            foto_comprovacao_url: novaUrlFoto,
+            foto_comprovacao_url: todasUrls,
             responsavel_nome: nomeGlobal.trim(),
             responsavel_cargo: cargoGlobal.trim(),
             respondido_em: new Date().toISOString(),
@@ -241,18 +288,32 @@ export default function PaginaTratativa() {
     );
   }
 
+  // Lista dinâmica de categorias para os filtros com contador
+  const categoriasContador: { [sigla: string]: number } = {};
+  itens.forEach(i => {
+    const s = i.sigla || 'OUTRO';
+    categoriasContador[s] = (categoriasContador[s] || 0) + 1;
+  });
+  const categoriasDisponiveis = Object.keys(categoriasContador).sort();
+
+  // Aplica filtros combinados (Status + Categoria)
   const itensFiltrados = itens.filter(i => {
-    if (filtroStatus === 'pendentes') return !i.respondido_em;
-    if (filtroStatus === 'respondidas') return !!i.respondido_em;
-    return true;
+    const matchStatus = 
+      filtroStatus === 'pendentes' ? !i.respondido_em :
+      filtroStatus === 'respondidas' ? !!i.respondido_em : true;
+
+    const matchCategoria = 
+      filtroCategoria === 'TODAS' ? true : (i.sigla === filtroCategoria);
+
+    return matchStatus && matchCategoria;
   });
 
   const concluidos = itens.filter(i => !!i.respondido_em).length;
 
   return (
-    <div className="min-h-screen bg-[#020617] text-slate-200 font-sans pb-20">
+    <div className="min-h-screen bg-[#020617] text-slate-200 font-sans pb-24">
       
-      {/* CABEÇALHO FIXO COM IDENTIFICAÇÃO ERGONÔMICA */}
+      {/* CABEÇALHO FIXO COM SESSÃO DO RESPONDENTE */}
       <header className="bg-[#0f172a] border-b border-slate-800 sticky top-0 z-30 shadow-md">
         <div className="max-w-5xl mx-auto px-4 py-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
@@ -275,7 +336,7 @@ export default function PaginaTratativa() {
             </div>
           </div>
 
-          {/* BARRA DO RESPONDENTE ATIVO (Define 1 vez para todas as 50) */}
+          {/* BARRA DO RESPONDENTE ATIVO */}
           <div className="pt-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
             {editandoPerfil ? (
               <div className="w-full bg-[#020617] p-3 rounded-lg border border-amber-500/40 flex flex-wrap items-center gap-3">
@@ -325,11 +386,14 @@ export default function PaginaTratativa() {
         </div>
       </header>
 
-      {/* FILTROS RÁPIDOS */}
-      <div className="max-w-5xl mx-auto px-4 mt-4 flex items-center justify-between gap-2 text-xs">
-        <div className="flex items-center gap-1.5">
-          <Filter className="w-3.5 h-3.5 text-slate-400" />
-          <span className="text-slate-400 font-semibold">Exibir:</span>
+      {/* ÁREA DE FILTROS (STATUS + CATEGORIAS HORIZONTAIS) */}
+      <div className="max-w-5xl mx-auto px-4 mt-4 space-y-2.5 text-xs">
+        
+        {/* Linha 1: Status */}
+        <div className="flex items-center gap-2">
+          <span className="text-slate-400 font-semibold flex items-center gap-1">
+            <Filter className="w-3.5 h-3.5" /> Status:
+          </span>
           <div className="bg-slate-900 p-0.5 rounded-lg border border-slate-800 flex gap-1">
             <button
               onClick={() => setFiltroStatus('todas')}
@@ -357,19 +421,58 @@ export default function PaginaTratativa() {
             </button>
           </div>
         </div>
+
+        {/* Linha 2: Categorias com rolagem horizontal livre no celular */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 custom-scroll no-wrap">
+          <span className="text-slate-500 font-semibold shrink-0 text-[11px]">Categorias:</span>
+          
+          <button
+            onClick={() => setFiltroCategoria('TODAS')}
+            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 transition border ${
+              filtroCategoria === 'TODAS'
+                ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+            }`}
+          >
+            TODAS ({itens.length})
+          </button>
+
+          {categoriasDisponiveis.map(cat => (
+            <button
+              key={cat}
+              onClick={() => setFiltroCategoria(cat)}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 transition border ${
+                filtroCategoria === cat
+                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+              }`}
+            >
+              {cat} ({categoriasContador[cat]})
+            </button>
+          ))}
+        </div>
+
       </div>
 
       {/* LISTA DAS OCORRÊNCIAS */}
       <main className="max-w-5xl mx-auto px-4 mt-4 space-y-5">
         {itensFiltrados.length === 0 ? (
           <div className="p-12 text-center bg-[#0f172a] rounded-xl border border-slate-800 text-slate-400 text-xs">
-            Nenhuma ocorrência encontrada com o filtro selecionado.
+            Nenhuma ocorrência com os filtros selecionados ({filtroCategoria} • {filtroStatus}).
           </div>
         ) : (
           itensFiltrados.map((item) => {
             const jaRespondido = !!item.respondido_em;
-            const previewAtual = previews[item.id] || item.foto_comprovacao_url;
             const historico = item.historico || [];
+
+            // Fotos já salvas na base
+            const fotosSalvas = (item.foto_comprovacao_url || '')
+              .split(',')
+              .map(u => u.trim())
+              .filter(Boolean);
+
+            // Fotos novas em estágio local
+            const previewsNovos = previewsLocais[item.id] || [];
 
             return (
               <div
@@ -410,19 +513,21 @@ export default function PaginaTratativa() {
                   {/* Coluna Visual & Diagnóstico Técnico */}
                   <div className="md:col-span-5 space-y-3">
                     {item.foto_original_url && (
-                      <div className="relative rounded-lg overflow-hidden border border-slate-700 bg-black aspect-[4/3] group shadow-inner">
+                      <div 
+                        onClick={() => setImagemModal(item.foto_original_url || null)}
+                        className="relative rounded-lg overflow-hidden border border-slate-700 bg-black aspect-[4/3] group shadow-inner cursor-pointer"
+                        title="Clique para ampliar"
+                      >
                         <img 
                           src={item.foto_original_url} 
                           alt="Evidência de Campo" 
-                          className="w-full h-full object-cover" 
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200" 
                         />
-                        <button
-                          type="button"
-                          onClick={() => setFotoModal(item.foto_original_url || null)}
-                          className="absolute bottom-2 right-2 p-1.5 bg-black/70 hover:bg-black text-white rounded-md text-[10px] flex items-center gap-1 transition"
-                        >
-                          <Eye className="w-3.5 h-3.5" /> Ampliar
-                        </button>
+                        <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                          <span className="px-2.5 py-1 bg-black/80 rounded text-[11px] text-white flex items-center gap-1 font-semibold">
+                            <ZoomIn className="w-3.5 h-3.5" /> Clique para Ampliar
+                          </span>
+                        </div>
                       </div>
                     )}
 
@@ -438,7 +543,7 @@ export default function PaginaTratativa() {
                     </div>
                   </div>
 
-                  {/* Coluna da Tratativa Operacional (Sem o bloco duplicado de delegação) */}
+                  {/* Coluna da Tratativa Operacional */}
                   <div className="md:col-span-7 space-y-3.5 border-t md:border-t-0 md:border-l border-slate-800/80 md:pl-5">
                     
                     {/* Linha do Tempo de Respostas Anteriores */}
@@ -448,21 +553,33 @@ export default function PaginaTratativa() {
                           <History className="w-3.5 h-3.5" /> Manifestações Registradas ({historico.length})
                         </span>
                         <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1 custom-scroll">
-                          {historico.map((h, hIdx) => (
-                            <div key={h.id || hIdx} className="text-xs bg-[#0f172a] p-2 rounded border border-slate-800/80 text-slate-300">
-                              <div className="flex items-center justify-between text-[10px] text-slate-400 border-b border-slate-800 pb-1 mb-1 font-mono">
-                                <span><strong>{h.autor_nome}</strong> {h.autor_cargo ? `(${h.autor_cargo})` : ''}</span>
-                                <span>{new Date(h.criado_em).toLocaleDateString('pt-BR')} {new Date(h.criado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
+                          {historico.map((h, hIdx) => {
+                            const fotosHist = (h.foto_comprovacao_url || '').split(',').map(u => u.trim()).filter(Boolean);
+                            return (
+                              <div key={h.id || hIdx} className="text-xs bg-[#0f172a] p-2 rounded border border-slate-800/80 text-slate-300">
+                                <div className="flex items-center justify-between text-[10px] text-slate-400 border-b border-slate-800 pb-1 mb-1 font-mono">
+                                  <span><strong>{h.autor_nome}</strong> {h.autor_cargo ? `(${h.autor_cargo})` : ''}</span>
+                                  <span>{new Date(h.criado_em).toLocaleDateString('pt-BR')} {new Date(h.criado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
+                                </div>
+                                <p className="text-[11px] font-semibold text-amber-400">Status: {h.status_definido}</p>
+                                {h.parecer && <p className="text-xs text-slate-200 mt-0.5">{h.parecer}</p>}
+                                {fotosHist.length > 0 && (
+                                  <div className="flex gap-2 mt-1.5 flex-wrap">
+                                    {fotosHist.map((fu, fIdx) => (
+                                      <button 
+                                        key={fIdx} 
+                                        type="button" 
+                                        onClick={() => setImagemModal(fu)} 
+                                        className="text-[10px] text-cyan-400 underline hover:text-cyan-300 flex items-center gap-1"
+                                      >
+                                        <ZoomIn className="w-3 h-3" /> Foto {fIdx + 1}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
                               </div>
-                              <p className="text-[11px] font-semibold text-amber-400">Status: {h.status_definido}</p>
-                              {h.parecer && <p className="text-xs text-slate-200 mt-0.5">{h.parecer}</p>}
-                              {h.foto_comprovacao_url && (
-                                <a href={h.foto_comprovacao_url} target="_blank" className="text-[10px] text-cyan-400 underline block mt-1">
-                                  Ver foto anexada
-                                </a>
-                              )}
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     )}
@@ -492,44 +609,78 @@ export default function PaginaTratativa() {
                         rows={2}
                         value={item.parecer_cliente || ''}
                         onChange={(e) => atualizarItemLocal(item.id, 'parecer_cliente', e.target.value)}
-                        placeholder="Ex: Manutenção notificada com OS nº 1234, resíduo recolhido da baia..."
+                        placeholder="Ex: Resíduos recolhidos da baia, OS de manutenção aberta..."
                         className="w-full bg-[#020617] border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500"
                       />
                     </div>
 
-                    {/* Anexo de Foto (Galeria ou Câmera) */}
+                    {/* COMPROVAÇÃO FOTOGRÁFICA (MÚLTIPLAS FOTOS) */}
                     <div>
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
                         Comprovação Fotográfica:
                       </span>
-                      <div className="flex items-center gap-3">
-                        {previewAtual ? (
-                          <div className="relative w-24 h-16 bg-black rounded-lg overflow-hidden border border-slate-700 shadow shrink-0">
-                            <img src={previewAtual} alt="Evidência" className="w-full h-full object-cover" />
+
+                      {/* Grade de Miniaturas Anexadas */}
+                      <div className="flex flex-wrap gap-2.5 mb-2">
+                        {/* 1. Fotos que já estavam salvas na base */}
+                        {fotosSalvas.map((url, fIdx) => (
+                          <div key={`salva-${fIdx}`} className="relative w-20 h-16 bg-black rounded-lg overflow-hidden border border-slate-700 shadow shrink-0 group">
+                            <img 
+                              src={url} 
+                              alt="Comprovação salva" 
+                              className="w-full h-full object-cover cursor-pointer" 
+                              onClick={() => setImagemModal(url)}
+                            />
                             <button
                               type="button"
-                              onClick={() => selecionarArquivo(item.id, null)}
-                              className="absolute top-1 right-1 bg-rose-600 p-1 rounded-full text-white hover:bg-rose-500"
+                              onClick={() => removerFotoJaSalva(item.id, url)}
+                              className="absolute top-1 right-1 bg-rose-600 p-1 rounded-full text-white hover:bg-rose-500 shadow"
+                              title="Remover foto"
                             >
                               <Trash2 className="w-3 h-3" />
                             </button>
                           </div>
-                        ) : (
-                          <label className="flex items-center gap-2 cursor-pointer px-3 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-300 transition">
-                            <Upload className="w-4 h-4 text-emerald-400" />
-                            <span>Anexar Foto (Câmera ou Arquivo)</span>
-                            <input
-                              type="file"
-                              accept="image/*"
-                              className="hidden"
-                              onChange={(e) => selecionarArquivo(item.id, e.target.files?.[0] || null)}
+                        ))}
+
+                        {/* 2. Fotos novas selecionadas agora */}
+                        {previewsNovos.map((url, fIdx) => (
+                          <div key={`nova-${fIdx}`} className="relative w-20 h-16 bg-black rounded-lg overflow-hidden border-2 border-emerald-500 shadow shrink-0 group">
+                            <img 
+                              src={url} 
+                              alt="Nova foto" 
+                              className="w-full h-full object-cover cursor-pointer" 
+                              onClick={() => setImagemModal(url)}
                             />
-                          </label>
-                        )}
+                            <button
+                              type="button"
+                              onClick={() => removerArquivoNovo(item.id, fIdx)}
+                              className="absolute top-1 right-1 bg-rose-600 p-1 rounded-full text-white hover:bg-rose-500 shadow"
+                              title="Remover anexo"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                            <span className="absolute bottom-0 inset-x-0 bg-emerald-600 text-slate-950 font-bold text-[8px] text-center uppercase tracking-wider">
+                              Novo
+                            </span>
+                          </div>
+                        ))}
+
+                        {/* Botão para adicionar mais fotos */}
+                        <label className="flex flex-col items-center justify-center w-20 h-16 rounded-lg bg-slate-900 hover:bg-slate-800 border border-dashed border-slate-600 cursor-pointer text-slate-400 hover:text-slate-200 transition">
+                          <Upload className="w-4 h-4 text-emerald-400 mb-0.5" />
+                          <span className="text-[9px] font-bold">+ Foto</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="hidden"
+                            onChange={(e) => adicionarArquivos(item.id, e.target.files)}
+                          />
+                        </label>
                       </div>
                     </div>
 
-                    {/* Botão de Salvar individual com feedback claro */}
+                    {/* Botão de Salvar individual */}
                     <div className="flex justify-end pt-1">
                       <button
                         type="button"
@@ -559,16 +710,27 @@ export default function PaginaTratativa() {
         )}
       </main>
 
-      {/* MODAL DE AMPLIAÇÃO DE FOTO (MOBILE & DESKTOP) */}
-      {fotoModal && (
+      {/* MODAL LIGHTBOX EM TELA CHEIA (AMPLIAÇÃO RÁPIDA E CLARA) */}
+      {imagemModal && (
         <div 
-          className="fixed inset-0 z-50 bg-black/90 p-4 flex items-center justify-center cursor-pointer"
-          onClick={() => setFotoModal(null)}
+          className="fixed inset-0 z-50 bg-black/95 p-4 flex flex-col items-center justify-center animate-fadeIn"
+          onClick={() => setImagemModal(null)}
         >
-          <div className="relative max-w-4xl max-h-[90vh]">
-            <img src={fotoModal} alt="Ampliada" className="max-w-full max-h-[90vh] object-contain rounded-lg border border-slate-800" />
-            <span className="text-white text-xs block text-center mt-2 opacity-70">Clique em qualquer lugar para fechar</span>
-          </div>
+          <button
+            type="button"
+            onClick={() => setImagemModal(null)}
+            className="absolute top-4 right-4 p-2.5 bg-slate-800/80 hover:bg-slate-700 text-white rounded-full flex items-center gap-1 text-xs font-bold transition"
+          >
+            <X className="w-5 h-5" />
+          </button>
+          
+          <img 
+            src={imagemModal} 
+            alt="Evidência Ampliada" 
+            className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl border border-slate-800"
+            onClick={(e) => e.stopPropagation()} 
+          />
+          <span className="text-slate-400 text-xs mt-3 select-none">Toque no 'X' ou fora da foto para fechar</span>
         </div>
       )}
 
