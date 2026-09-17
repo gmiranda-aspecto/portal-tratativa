@@ -3,7 +3,20 @@
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { CheckCircle2, Clock, Upload, Trash2, ShieldAlert, Building2, User } from 'lucide-react';
+import { CheckCircle2, Clock, Upload, Trash2, ShieldAlert, Building2, User, History, ArrowRight } from 'lucide-react';
+
+interface HistoricoTratativa {
+  id: string;
+  autor_nome: string;
+  autor_cargo?: string;
+  status_definido: string;
+  parecer?: string;
+  setor_designado?: string;
+  responsavel_designado?: string;
+  previsao_conclusao?: string;
+  foto_comprovacao_url?: string;
+  criado_em: string;
+}
 
 interface Ocorrencia {
   id: string;
@@ -22,6 +35,7 @@ interface Ocorrencia {
   setor_designado?: string;
   previsao_conclusao?: string;
   respondido_em?: string;
+  historico?: HistoricoTratativa[];
 }
 
 interface Vistoria {
@@ -56,29 +70,35 @@ export default function PaginaTratativa() {
   const [previews, setPreviews] = useState<{ [key: string]: string }>({});
   const [arquivosFoto, setArquivosFoto] = useState<{ [key: string]: File }>({});
 
+  // Guarda quem está respondendo agora em cada card
+  const [autorAtual, setAutorAtual] = useState<{ [key: string]: { nome: string; cargo: string } }>({});
+
   useEffect(() => {
     async function carregarDados() {
       if (!slug) return;
-      const { data: v, error: errV } = await supabase
-        .from('vistorias')
-        .select('*')
-        .eq('slug', slug)
-        .single();
+      const { data: v } = await supabase.from('vistorias').select('*').eq('slug', slug).single();
 
-      if (errV || !v) {
+      if (!v) {
         setCarregando(false);
         return;
       }
-
       setVistoria(v);
 
       const { data: o } = await supabase
         .from('ocorrencias')
-        .select('*')
+        .select('*, historico:tratativas_historico(*)')
         .eq('vistoria_id', v.id)
         .order('id_oficial', { ascending: true });
 
-      setItens(o || []);
+      if (o) {
+        // Ordena o histórico cronologicamente
+        o.forEach(item => {
+          if (item.historico) {
+            item.historico.sort((a: any, b: any) => new Date(a.criado_em).getTime() - new Date(b.criado_em).getTime());
+          }
+        });
+        setItens(o);
+      }
       setCarregando(false);
     }
     carregarDados();
@@ -88,18 +108,20 @@ export default function PaginaTratativa() {
     setItens(prev => prev.map(item => item.id === id ? { ...item, [campo]: valor } : item));
   };
 
+  const atualizarAutor = (id: string, campo: 'nome' | 'cargo', valor: string) => {
+    setAutorAtual(prev => ({
+      ...prev,
+      [id]: {
+        ...(prev[id] || { nome: '', cargo: '' }),
+        [campo]: valor
+      }
+    }));
+  };
+
   const selecionarArquivo = (id: string, file: File | null) => {
     if (!file) {
-      setArquivosFoto(prev => {
-        const copia = { ...prev };
-        delete copia[id];
-        return copia;
-      });
-      setPreviews(prev => {
-        const copia = { ...prev };
-        delete copia[id];
-        return copia;
-      });
+      setArquivosFoto(prev => { const c = { ...prev }; delete c[id]; return c; });
+      setPreviews(prev => { const c = { ...prev }; delete c[id]; return c; });
       return;
     }
     setArquivosFoto(prev => ({ ...prev, [id]: file }));
@@ -107,6 +129,12 @@ export default function PaginaTratativa() {
   };
 
   const salvarTratativa = async (item: Ocorrencia) => {
+    const autor = autorAtual[item.id];
+    if (!autor || !autor.nome.trim()) {
+      alert("Por favor, informe seu Nome para sabermos quem realizou esta tratativa.");
+      return;
+    }
+
     setSalvandoId(item.id);
 
     try {
@@ -120,31 +148,59 @@ export default function PaginaTratativa() {
           .upload(nomeFinal, f);
 
         if (!errUp && up) {
-          const { data: pub } = supabase.storage
-            .from('evidencias-tratativas')
-            .getPublicUrl(up.path);
+          const { data: pub } = supabase.storage.from('evidencias-tratativas').getPublicUrl(up.path);
           novaUrlFoto = pub.publicUrl;
         }
       }
 
-      const { error: errUpdate } = await supabase
+      // 1. Atualiza a ocorrência principal
+      await supabase
         .from('ocorrencias')
         .update({
           status_tratativa: item.status_tratativa,
           parecer_cliente: item.parecer_cliente,
           foto_comprovacao_url: novaUrlFoto,
-          responsavel_nome: item.responsavel_nome,
-          responsavel_cargo: item.responsavel_cargo,
+          responsavel_nome: autor.nome,
+          responsavel_cargo: autor.cargo,
           setor_designado: item.setor_designado,
           previsao_conclusao: item.previsao_conclusao || null,
           respondido_em: new Date().toISOString()
         })
         .eq('id', item.id);
 
-      if (!errUpdate) {
-        atualizarItemLocal(item.id, 'foto_comprovacao_url', novaUrlFoto);
-        atualizarItemLocal(item.id, 'respondido_em', new Date().toISOString());
-      }
+      // 2. Insere um novo registro no Histórico / Auditoria
+      const novoHistorico = {
+        ocorrencia_id: item.id,
+        autor_nome: autor.nome,
+        autor_cargo: autor.cargo,
+        status_definido: item.status_tratativa || OPCOES_STATUS[0],
+        parecer: item.parecer_cliente || '',
+        setor_designado: item.setor_designado || '',
+        responsavel_designado: item.responsavel_nome || '',
+        previsao_conclusao: item.previsao_conclusao || null,
+        foto_comprovacao_url: novaUrlFoto
+      };
+
+      const { data: histCriado } = await supabase
+        .from('tratativas_historico')
+        .insert(novoHistorico)
+        .select()
+        .single();
+
+      // Atualiza o estado local
+      setItens(prev => prev.map(it => {
+        if (it.id === item.id) {
+          return {
+            ...it,
+            foto_comprovacao_url: novaUrlFoto,
+            respondido_em: new Date().toISOString(),
+            historico: [...(it.historico || []), histCriado || novoHistorico]
+          };
+        }
+        return it;
+      }));
+
+      alert("Tratativa salva com sucesso no histórico!");
     } catch (err) {
       alert('Erro ao salvar tratativa.');
     } finally {
@@ -169,7 +225,7 @@ export default function PaginaTratativa() {
         <div className="bg-slate-900 border border-slate-800 p-8 rounded-2xl max-w-md">
           <ShieldAlert className="w-12 h-12 text-rose-500 mx-auto mb-4" />
           <h1 className="text-base font-bold text-slate-100">Vistoria Não Encontrada</h1>
-          <p className="text-xs text-slate-400 mt-2">Verifique o endereço fornecido ou entre em contato com a equipe técnica.</p>
+          <p className="text-xs text-slate-400 mt-2">Verifique o endereço fornecido ou contate a equipe técnica.</p>
         </div>
       </div>
     );
@@ -189,7 +245,7 @@ export default function PaginaTratativa() {
               </h1>
             </div>
             <p className="text-[11px] text-slate-400 mt-0.5">
-              Vistoria realizada em {vistoria.data_vistoria} • Resp. Técnico: {vistoria.vistoriador}
+              Vistoria em {vistoria.data_vistoria} • Resp. Técnico: {vistoria.vistoriador}
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -205,6 +261,7 @@ export default function PaginaTratativa() {
           const jaRespondido = !!item.respondido_em;
           const exigeDelegacao = item.status_tratativa?.includes("designado") || item.status_tratativa?.includes("Designar");
           const previewAtual = previews[item.id] || item.foto_comprovacao_url;
+          const historico = item.historico || [];
 
           return (
             <div
@@ -215,6 +272,7 @@ export default function PaginaTratativa() {
                   : 'border-slate-800 bg-[#0f172a]'
               }`}
             >
+              {/* Header do Card */}
               <div className="flex items-center justify-between border-b border-slate-800/80 pb-3 mb-4">
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-200 border border-slate-700">
@@ -230,14 +288,21 @@ export default function PaginaTratativa() {
                   </span>
                   {jaRespondido && (
                     <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-500/40 px-2 py-0.5 rounded flex items-center gap-1">
-                      <CheckCircle2 className="w-3 h-3" /> Enviado
+                      <CheckCircle2 className="w-3 h-3" /> Atualizado
                     </span>
                   )}
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                {/* Lado Esquerdo: Detalhes e FOTO ORIGINAL */}
                 <div className="space-y-3">
+                  {item.foto_original_url ? (
+                    <div className="rounded-lg overflow-hidden border border-slate-700 bg-black aspect-video max-h-48 mb-2 shadow">
+                      <img src={item.foto_original_url} alt="Foto da Ocorrência" className="w-full h-full object-cover" />
+                    </div>
+                  ) : null}
+
                   <div>
                     <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Constatação em Campo:</span>
                     <p className="text-xs text-slate-200 mt-1 leading-relaxed">{item.apontamento}</p>
@@ -248,7 +313,62 @@ export default function PaginaTratativa() {
                   </div>
                 </div>
 
+                {/* Lado Direito: Formulário + Linha do Tempo */}
                 <div className="md:col-span-2 space-y-4 border-t md:border-t-0 md:border-l border-slate-800/80 md:pl-5">
+                  
+                  {/* Linha do Tempo de Atualizações Anteriores */}
+                  {historico.length > 0 && (
+                    <div className="bg-[#020617] border border-slate-800 p-3 rounded-lg space-y-2">
+                      <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                        <History className="w-3.5 h-3.5" /> Histórico de Acompanhamento ({historico.length})
+                      </span>
+                      <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
+                        {historico.map((h, hIdx) => (
+                          <div key={h.id || hIdx} className="text-xs bg-[#0f172a] p-2 rounded border border-slate-800 text-slate-300">
+                            <div className="flex items-center justify-between text-[10px] text-slate-400 border-b border-slate-800 pb-1 mb-1 font-mono">
+                              <span><strong>{h.autor_nome}</strong> {h.autor_cargo ? `(${h.autor_cargo})` : ''}</span>
+                              <span>{new Date(h.criado_em).toLocaleDateString('pt-BR')} {new Date(h.criado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
+                            </div>
+                            <p className="text-[11px] font-semibold text-amber-400">Status: {h.status_definido}</p>
+                            {h.parecer && <p className="text-xs text-slate-300 mt-0.5">{h.parecer}</p>}
+                            {h.setor_designado && (
+                              <p className="text-[10px] text-purple-400 mt-1 flex items-center gap-1">
+                                <ArrowRight className="w-3 h-3" /> Repassado para: {h.setor_designado} {h.responsavel_designado ? `(${h.responsavel_designado})` : ''}
+                              </p>
+                            )}
+                            {h.foto_comprovacao_url && (
+                              <a href={h.foto_comprovacao_url} target="_blank" className="text-[10px] text-cyan-400 underline block mt-1">Ver foto anexada</a>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Quem está respondendo agora */}
+                  <div className="bg-slate-900/60 p-3 rounded-lg border border-slate-800 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Seu Nome *</label>
+                      <input
+                        type="text"
+                        placeholder="Ex: Regina Silva"
+                        value={autorAtual[item.id]?.nome || ''}
+                        onChange={(e) => atualizarAutor(item.id, 'nome', e.target.value)}
+                        className="w-full bg-[#020617] border border-slate-700 rounded p-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Seu Cargo / Setor</label>
+                      <input
+                        type="text"
+                        placeholder="Ex: Téc. Segurança / Operação"
+                        value={autorAtual[item.id]?.cargo || ''}
+                        onChange={(e) => atualizarAutor(item.id, 'cargo', e.target.value)}
+                        className="w-full bg-[#020617] border border-slate-700 rounded p-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                      />
+                    </div>
+                  </div>
+
                   <div>
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
                       Status da Ação:
@@ -267,45 +387,26 @@ export default function PaginaTratativa() {
                   {exigeDelegacao && (
                     <div className="bg-[#020617] p-3.5 rounded-lg border border-amber-500/30 space-y-3">
                       <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider block flex items-center gap-1.5">
-                        <User className="w-3 h-3" /> Informações de Delegação (Evite o Limbo)
+                        <User className="w-3 h-3" /> Delegar para outro responsável/setor
                       </span>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                         <div>
                           <label className="text-[10px] text-slate-400 block mb-1">Setor Destino *</label>
                           <input
                             type="text"
-                            placeholder="Ex: Manutenção, Operação, PCM"
+                            placeholder="Ex: Meio Ambiente, PCM"
                             value={item.setor_designado || ''}
                             onChange={(e) => atualizarItemLocal(item.id, 'setor_designado', e.target.value)}
                             className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
                           />
                         </div>
                         <div>
-                          <label className="text-[10px] text-slate-400 block mb-1">Responsável Designado *</label>
+                          <label className="text-[10px] text-slate-400 block mb-1">Pessoa Responsável</label>
                           <input
                             type="text"
-                            placeholder="Nome do encarregado"
+                            placeholder="Ex: Rogério"
                             value={item.responsavel_nome || ''}
                             onChange={(e) => atualizarItemLocal(item.id, 'responsavel_nome', e.target.value)}
-                            className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] text-slate-400 block mb-1">Função / Cargo</label>
-                          <input
-                            type="text"
-                            placeholder="Ex: Supervisor de Turno"
-                            value={item.responsavel_cargo || ''}
-                            onChange={(e) => atualizarItemLocal(item.id, 'responsavel_cargo', e.target.value)}
-                            className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] text-slate-400 block mb-1">Prazo Acordado</label>
-                          <input
-                            type="date"
-                            value={item.previsao_conclusao || ''}
-                            onChange={(e) => atualizarItemLocal(item.id, 'previsao_conclusao', e.target.value)}
                             className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
                           />
                         </div>
@@ -315,17 +416,18 @@ export default function PaginaTratativa() {
 
                   <div>
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                      Parecer do Empreendimento / Justificativa:
+                      Parecer / Ação Adotada:
                     </label>
                     <textarea
                       rows={2}
                       value={item.parecer_cliente || ''}
                       onChange={(e) => atualizarItemLocal(item.id, 'parecer_cliente', e.target.value)}
-                      placeholder="Descreva as medidas implementadas ou o plano adotado..."
+                      placeholder="Descreva a medida corretiva tomada ou a instrução dada..."
                       className="w-full bg-[#020617] border border-slate-700 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
                     />
                   </div>
 
+                  {/* UPLOAD CORRIGIDO (Foto ou Galeria) */}
                   <div>
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
                       Evidência Fotográfica:
@@ -345,11 +447,11 @@ export default function PaginaTratativa() {
                       ) : (
                         <label className="flex items-center gap-2 cursor-pointer px-3 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-300 transition">
                           <Upload className="w-4 h-4 text-emerald-400" />
-                          <span>Anexar Comprovação</span>
+                          <span>Anexar Comprovação (Câmera ou Galeria)</span>
+                          {/* SEM O CAPTURE: Permite selecionar arquivos locais e galeria no celular */}
                           <input
                             type="file"
-                            accept="image/*"
-                            capture="environment"
+                            accept="image/*,application/pdf"
                             className="hidden"
                             onChange={(e) => selecionarArquivo(item.id, e.target.files?.[0] || null)}
                           />
@@ -373,7 +475,7 @@ export default function PaginaTratativa() {
                       ) : (
                         <>
                           <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>{jaRespondido ? 'Atualizar Resposta' : 'Salvar Tratativa'}</span>
+                          <span>Salvar Atualização</span>
                         </>
                       )}
                     </button>
