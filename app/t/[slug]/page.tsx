@@ -26,6 +26,7 @@ interface Ocorrencia {
   apontamento: string;
   recomendacao: string;
   severidade: string;
+  conformidade?: 'Não Conforme' | 'Oportunidade de Melhoria' | 'Conforme';
   foto_original_url?: string;
   status_tratativa?: string;
   parecer_cliente?: string;
@@ -56,6 +57,12 @@ const OPCOES_STATUS = [
   "Designar ao responsável do turno / terminal",
   "Outro"
 ];
+
+const classificacaoVisual = (valor?: string) => {
+  if (valor === 'Conforme') return { label: 'Conforme', cls: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300' };
+  if (valor === 'Oportunidade de Melhoria') return { label: 'Oportunidade de Melhoria', cls: 'border-sky-500/40 bg-sky-500/10 text-sky-300' };
+  return { label: 'Não Conforme', cls: 'border-rose-500/40 bg-rose-500/10 text-rose-300' };
+};
 
 export default function PaginaTratativa() {
   const params = useParams();
@@ -184,7 +191,11 @@ export default function PaginaTratativa() {
 
       for (let i = 0; i < novosArquivos.length; i++) {
         const f = novosArquivos[i];
-        const nomeFinal = `${item.id_oficial}_${Date.now()}_${i}_${f.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+        const nomeFinal = `${item.id_oficial}
+                        {(() => {
+                          const cv = classificacaoVisual(item.conformidade);
+                          return <span className={`ml-2 text-[9px] font-bold uppercase tracking-wider border px-2 py-1 rounded-md ${cv.cls}`}>{cv.label}</span>;
+                        })()}_${Date.now()}_${i}_${f.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
         const { data: up, error: errUp } = await supabase.storage
           .from('evidencias-tratativas')
           .upload(nomeFinal, f);

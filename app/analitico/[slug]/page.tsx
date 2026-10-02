@@ -4,6 +4,8 @@ import React, { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { Printer, Copy, Check, ArrowLeft } from 'lucide-react';
+import Link from 'next/link';
+
 export default function RelatorioAnaliticoPage() {
   const params = useParams();
   const slug = params?.slug as string;
@@ -93,6 +95,9 @@ export default function RelatorioAnaliticoPage() {
   });
 
   const totalApontamentos = itens.length;
+  const totalConformes = itens.filter(it => it.conformidade === 'Conforme').length;
+  const totalMelhorias = itens.filter(it => it.conformidade === 'Oportunidade de Melhoria').length;
+  const totalNaoConformes = itens.filter(it => !it.conformidade || it.conformidade === 'Não Conforme').length;
   const regTotal = contagemStatusGeral['Regularizado'];
   const desigTotal = contagemStatusGeral['Deverá ser designado ao setor responsável'] + contagemStatusGeral['Designar ao responsável do turno / terminal'];
   const decTotal = contagemStatusGeral['Permanece, depende de decisão administrativa / investimento / contratação'];
@@ -106,7 +111,7 @@ export default function RelatorioAnaliticoPage() {
   const maxQtdCat = Math.max(...Object.values(categoriasMap).map(c => c.itens.length), 1);
 
   const copiarMatrizTSV = () => {
-    let tsv = "Item\tCategoria\tDiagnóstico\tRespondente\tStatus Consolidado\tDevolutiva Literal\n";
+    let tsv = "Item\tCategoria\tClassificação\tDiagnóstico\tRespondente\tStatus Consolidado\tDevolutiva Literal\n";
     itens.forEach(it => {
       const devList = (it.historico && it.historico.length > 0) ? it.historico : (it.respondido_em ? [{
         autor_nome: it.responsavel_nome,
@@ -131,7 +136,10 @@ export default function RelatorioAnaliticoPage() {
       
       {/* Barra de Ação Superior (Oculta na Impressão) */}
       <div className="max-w-4xl mx-auto mb-8 flex items-center justify-between print:hidden">
-<div className="flex gap-2">
+        <Link href="/admin" className="text-xs font-bold text-slate-600 hover:text-slate-900 flex items-center gap-1">
+          <ArrowLeft className="w-4 h-4" /> Voltar ao Painel
+        </Link>
+        <div className="flex gap-2">
           <button onClick={copiarMatrizTSV} className="px-3 py-1.5 border border-slate-300 text-xs font-bold rounded-lg flex items-center gap-1.5 hover:bg-slate-50">
             {copiado ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
             {copiado ? 'Copiado TSV!' : 'Copiar p/ Excel'}
@@ -140,16 +148,6 @@ export default function RelatorioAnaliticoPage() {
             <Printer className="w-3.5 h-3.5" /> Imprimir / Salvar PDF
           </button>
         </div>
-      </div>
-
-      <div className="max-w-4xl mx-auto mb-4 flex justify-end print:hidden">
-        <button
-          onClick={() => window.print()}
-          className="px-4 py-2 bg-slate-900 text-white text-xs font-bold rounded-lg flex items-center gap-2 shadow hover:bg-slate-800"
-        >
-          <Printer className="w-4 h-4" />
-          Imprimir / Salvar PDF
-        </button>
       </div>
 
       <div className="max-w-4xl mx-auto space-y-10 text-[13px] leading-relaxed text-slate-800 print:max-w-full">
@@ -370,8 +368,24 @@ export default function RelatorioAnaliticoPage() {
                   parecer: it.parecer_cliente || it.status_tratativa
                 }] : []);
 
-                return (
+                const classificacaoResumo = (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6 print:gap-2">
+      <div className="border border-slate-300 rounded-lg p-3 bg-white">
+        <div className="text-2xl font-black text-slate-900">{totalApontamentos}</div>
+        <div className="text-[10px] uppercase font-bold text-slate-500">Registros</div>
+      </div>
+      {totalConformes > 0 && <div className="border border-emerald-200 rounded-lg p-3 bg-emerald-50/40"><div className="text-2xl font-black text-emerald-700">{totalConformes}</div><div className="text-[10px] uppercase font-bold text-emerald-700">Conformes</div></div>}
+      {totalMelhorias > 0 && <div className="border border-sky-200 rounded-lg p-3 bg-sky-50/50"><div className="text-2xl font-black text-sky-700">{totalMelhorias}</div><div className="text-[10px] uppercase font-bold text-sky-700">Oportunidades de Melhoria</div></div>}
+      <div className="border border-rose-200 rounded-lg p-3 bg-rose-50/40">
+        <div className="text-2xl font-black text-rose-700">{totalNaoConformes}</div>
+        <div className="text-[10px] uppercase font-bold text-rose-700">Não Conformidades</div>
+      </div>
+    </div>
+  );
+
+  return (
                   <div key={it.id} className="p-3 border border-slate-200 rounded-lg space-y-2 bg-white shadow-sm text-xs">
+        {classificacaoResumo}
                     <div className="flex justify-between items-start border-b border-slate-100 pb-1.5">
                       <span className="font-bold text-slate-900">
                         {it.id_oficial} — {it.categoria_full}
@@ -387,72 +401,6 @@ export default function RelatorioAnaliticoPage() {
                     <p className="text-slate-600 italic">
                       <strong>Recomendação:</strong> {it.recomendacao}
                     </p>
-
-                    {/* Comparativo fotográfico: mantém a estrutura analítica e acrescenta
-                        somente a evidência visual da vistoria e das devolutivas. */}
-                    <div className="mt-3 pt-3 border-t border-slate-100">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          <div>
-                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block mb-1.5">
-                              Evidência da vistoria
-                            </span>
-                            {it.foto_original_url ? (
-                              <img
-                                src={it.foto_original_url}
-                                alt={`Evidência original ${it.id_oficial}`}
-                                className="w-full h-64 object-contain rounded-lg border border-slate-200 bg-slate-50 p-2 print:h-56"
-                              />
-                            ) : (
-                              <div className="h-64 rounded-lg border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center text-[10px] text-slate-400 print:h-56">
-                                Sem fotografia original
-                              </div>
-                            )}
-                          </div>
-
-                          <div>
-                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block mb-1.5">
-                              Evidências das tratativas
-                            </span>
-                            {(() => {
-                              const evidencias = devList
-                                .flatMap((d: any) => (d.foto_comprovacao_url || '').split(','))
-                                .map((u: string) => u.trim())
-                                .filter(Boolean);
-
-                              const fallback = evidencias.length === 0
-                                ? (it.foto_comprovacao_url || '').split(',').map((u: string) => u.trim()).filter(Boolean)
-                                : [];
-
-                              const fotos = Array.from(new Set([...evidencias, ...fallback]));
-
-                              return fotos.length > 0 ? (
-                                <div className={`grid gap-2 ${
-                                  fotos.length === 1
-                                    ? 'grid-cols-1'
-                                    : fotos.length === 2
-                                      ? 'grid-cols-2'
-                                      : 'grid-cols-2 lg:grid-cols-3'
-                                }`}>
-                                  {fotos.map((url: string, fotoIdx: number) => (
-                                    <img
-                                      key={`${it.id}-evidencia-${fotoIdx}`}
-                                      src={url}
-                                      alt={`Evidência de tratativa ${it.id_oficial} ${fotoIdx + 1}`}
-                                      className={`w-full object-contain rounded-lg border border-slate-200 bg-slate-50 p-1 ${
-                                        fotos.length === 1 ? 'h-64 print:h-56' : 'h-48 print:h-40'
-                                      }`}
-                                    />
-                                  ))}
-                                </div>
-                              ) : (
-                                <div className="h-64 rounded-lg border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center text-[10px] text-slate-400 print:h-56">
-                                  Sem evidência fotográfica de tratativa
-                                </div>
-                              );
-                            })()}
-                          </div>
-                        </div>
-                      </div>
 
                     {/* Tabela de Respondentes deste item */}
                     <div className="mt-2 pt-2 border-t border-slate-100">
