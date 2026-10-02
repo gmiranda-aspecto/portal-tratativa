@@ -395,10 +395,10 @@ export default function RelatorioAnaliticoPage() {
                               <img
                                 src={it.foto_original_url}
                                 alt={`Evidência original ${it.id_oficial}`}
-                                className="w-full h-44 object-cover rounded-lg border border-slate-200 bg-slate-50"
+                                className="w-full h-36 object-contain rounded-lg border border-slate-200 bg-slate-50 p-1"
                               />
                             ) : (
-                              <div className="h-44 rounded-lg border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center text-[10px] text-slate-400">
+                              <div className="h-36 rounded-lg border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center text-[10px] text-slate-400">
                                 Sem fotografia original
                               </div>
                             )}
@@ -421,18 +421,26 @@ export default function RelatorioAnaliticoPage() {
                               const fotos = Array.from(new Set([...evidencias, ...fallback]));
 
                               return fotos.length > 0 ? (
-                                <div className={`grid gap-2 ${fotos.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                                <div className={`grid gap-2 ${
+                                  fotos.length === 1
+                                    ? 'grid-cols-1'
+                                    : fotos.length === 2
+                                      ? 'grid-cols-2'
+                                      : 'grid-cols-2 lg:grid-cols-3'
+                                }`}>
                                   {fotos.map((url: string, fotoIdx: number) => (
                                     <img
                                       key={`${it.id}-evidencia-${fotoIdx}`}
                                       src={url}
                                       alt={`Evidência de tratativa ${it.id_oficial} ${fotoIdx + 1}`}
-                                      className="w-full h-44 object-cover rounded-lg border border-slate-200 bg-slate-50"
+                                      className={`w-full object-contain rounded-lg border border-slate-200 bg-slate-50 p-1 ${
+                                        fotos.length === 1 ? 'h-36' : 'h-28'
+                                      }`}
                                     />
                                   ))}
                                 </div>
                               ) : (
-                                <div className="h-44 rounded-lg border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center text-[10px] text-slate-400">
+                                <div className="h-36 rounded-lg border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center text-[10px] text-slate-400">
                                   Sem evidência fotográfica de tratativa
                                 </div>
                               );
