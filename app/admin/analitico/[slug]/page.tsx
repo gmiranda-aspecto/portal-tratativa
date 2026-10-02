@@ -383,6 +383,64 @@ export default function RelatorioAnaliticoPage() {
                       <strong>Recomendação:</strong> {it.recomendacao}
                     </p>
 
+                    {/* Comparativo fotográfico: mantém a estrutura analítica e acrescenta
+                        somente a evidência visual da vistoria e das devolutivas. */}
+                    <div className="mt-3 pt-3 border-t border-slate-100">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block mb-1.5">
+                              Evidência da vistoria
+                            </span>
+                            {it.foto_original_url ? (
+                              <img
+                                src={it.foto_original_url}
+                                alt={`Evidência original ${it.id_oficial}`}
+                                className="w-full h-44 object-cover rounded-lg border border-slate-200 bg-slate-50"
+                              />
+                            ) : (
+                              <div className="h-44 rounded-lg border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center text-[10px] text-slate-400">
+                                Sem fotografia original
+                              </div>
+                            )}
+                          </div>
+
+                          <div>
+                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block mb-1.5">
+                              Evidências das tratativas
+                            </span>
+                            {(() => {
+                              const evidencias = devList
+                                .flatMap((d: any) => (d.foto_comprovacao_url || '').split(','))
+                                .map((u: string) => u.trim())
+                                .filter(Boolean);
+
+                              const fallback = evidencias.length === 0
+                                ? (it.foto_comprovacao_url || '').split(',').map((u: string) => u.trim()).filter(Boolean)
+                                : [];
+
+                              const fotos = Array.from(new Set([...evidencias, ...fallback]));
+
+                              return fotos.length > 0 ? (
+                                <div className={`grid gap-2 ${fotos.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                                  {fotos.map((url: string, fotoIdx: number) => (
+                                    <img
+                                      key={`${it.id}-evidencia-${fotoIdx}`}
+                                      src={url}
+                                      alt={`Evidência de tratativa ${it.id_oficial} ${fotoIdx + 1}`}
+                                      className="w-full h-44 object-cover rounded-lg border border-slate-200 bg-slate-50"
+                                    />
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="h-44 rounded-lg border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center text-[10px] text-slate-400">
+                                  Sem evidência fotográfica de tratativa
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        </div>
+                      </div>
+
                     {/* Tabela de Respondentes deste item */}
                     <div className="mt-2 pt-2 border-t border-slate-100">
                       <table className="w-full text-left border-collapse text-[11px]">
